@@ -79,8 +79,8 @@ func TestCloneLabelsSharedParent(t *testing.T) {
 }
 
 func TestProjectTreeShape(t *testing.T) {
-	data, sessions, live := fakeData()
-	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live}
+	data, sessions, live, prsByID := fakeData()
+	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID}
 	m.rebuildNav()
 	m.nav.collapsed = map[string]bool{}
 	m.rebuildNav()
@@ -156,10 +156,10 @@ func TestProjectTreeShape(t *testing.T) {
 // TestProjectDetail asserts the project right-pane shows the origin, aggregate
 // and per-clone counts, and the live agents running anywhere in the project.
 func TestProjectDetail(t *testing.T) {
-	data, sessions, live := fakeData()
+	data, sessions, live, prsByID := fakeData()
 	m := appModel{
 		width: 120, height: 40, ready: true,
-		nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live,
+		nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID,
 	}
 	m.layout()
 	m.rebuildNav()
