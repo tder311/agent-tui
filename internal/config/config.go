@@ -62,6 +62,10 @@ type Config struct {
 	// SessionCap caps historical sessions per clone, most recent first.
 	// 0 = unlimited.
 	SessionCap *int `json:"session_cap,omitempty"`
+	// PRSAuthor filters open pull requests to those authored by the given
+	// GitHub login. Default "@me" (the authenticated gh user) shows only
+	// your own PRs; a specific login shows another author; "" shows all.
+	PRSAuthor *string `json:"prs_author,omitempty"`
 	// ScanRoot is the legacy single scan root, and RepoRoots the legacy
 	// repo list; both are merged into scan_roots when present. New configs
 	// omit them.
@@ -90,6 +94,7 @@ func Default() *Config {
 		RefreshSeconds: 10,
 		SessionDays:    intPtr(30),
 		SessionCap:     intPtr(50),
+		PRSAuthor:      strPtr("@me"),
 	}
 }
 
@@ -109,6 +114,15 @@ func (c *Config) SessionCapValue() int {
 		return 50
 	}
 	return *c.SessionCap
+}
+
+// PRSAuthorValue returns the PR author filter, defaulting to "@me" (the
+// authenticated gh user) when unset. "" shows all PRs.
+func (c *Config) PRSAuthorValue() string {
+	if c == nil || c.PRSAuthor == nil {
+		return "@me"
+	}
+	return *c.PRSAuthor
 }
 
 func DefaultPath() string {
@@ -154,6 +168,9 @@ func (c *Config) applyDefaults() {
 	if c.SessionCap == nil {
 		c.SessionCap = intPtr(*d.SessionCap)
 	}
+	if c.PRSAuthor == nil {
+		c.PRSAuthor = strPtr(*d.PRSAuthor)
+	}
 	if len(c.ScanRoots) == 0 {
 		c.ScanRoots = d.ScanRoots
 	}
@@ -166,6 +183,8 @@ func (c *Config) applyDefaults() {
 }
 
 func intPtr(v int) *int { return &v }
+
+func strPtr(v string) *string { return &v }
 
 func cloneSpawners(in map[string]Spawner) map[string]Spawner {
 	out := make(map[string]Spawner, len(in))

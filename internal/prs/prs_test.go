@@ -52,7 +52,7 @@ func TestParseProject(t *testing.T) {
 }
 
 func TestListPRsParse(t *testing.T) {
-	prs := ListPRs(context.Background(), "github.com/org/alpha", fakeRunner(sampleOutput, nil))
+	prs := ListPRs(context.Background(), "github.com/org/alpha", "@me", fakeRunner(sampleOutput, nil))
 	if len(prs) != 4 {
 		t.Fatalf("expected 4 PRs, got %d", len(prs))
 	}
@@ -85,18 +85,55 @@ func TestListPRsParse(t *testing.T) {
 }
 
 func TestListPRsFailSilently(t *testing.T) {
-	if got := ListPRs(context.Background(), "github.com/org/alpha", fakeRunner("", errors.New("exec: gh: not found"))); len(got) != 0 {
+	if got := ListPRs(context.Background(), "github.com/org/alpha", "@me", fakeRunner("", errors.New("exec: gh: not found"))); len(got) != 0 {
 		t.Errorf("runner error should yield empty, got %+v", got)
 	}
-	if got := ListPRs(context.Background(), "github.com/org/alpha", fakeRunner("not json", nil)); len(got) != 0 {
+	if got := ListPRs(context.Background(), "github.com/org/alpha", "@me", fakeRunner("not json", nil)); len(got) != 0 {
 		t.Errorf("bad JSON should yield empty, got %+v", got)
 	}
-	if got := ListPRs(context.Background(), "github.com/org/alpha", fakeRunner("[]", nil)); len(got) != 0 {
+	if got := ListPRs(context.Background(), "github.com/org/alpha", "@me", fakeRunner("[]", nil)); len(got) != 0 {
 		t.Errorf("empty list should yield empty, got %+v", got)
 	}
-	if got := ListPRs(context.Background(), "gitlab.com/org/alpha", nil); len(got) != 0 {
+	if got := ListPRs(context.Background(), "gitlab.com/org/alpha", "@me", nil); len(got) != 0 {
 		t.Errorf("non-github identity should yield empty, got %+v", got)
 	}
+}
+
+// TestPRListArgsAuthor asserts the gh argv carries the author filter: @me by
+// default (only your own PRs), a specific login when given, and no --author
+// flag at all for "" (all PRs).
+func TestPRListArgsAuthor(t *testing.T) {
+	cases := []struct {
+		author  string
+		contains []string
+		absent  []string
+	}{
+		{"@me", []string{"--author", "@me"}, nil},
+		{"tder311", []string{"--author", "tder311"}, nil},
+		{"", nil, []string{"--author"}},
+	}
+	for _, c := range cases {
+		args := prListArgs("org", "repo", c.author)
+		for _, want := range c.contains {
+			if !containsStr(args, want) {
+				t.Errorf("author %q: args %v missing %q", c.author, args, want)
+			}
+		}
+		for _, bad := range c.absent {
+			if containsStr(args, bad) {
+				t.Errorf("author %q: args %v should not contain %q", c.author, args, bad)
+			}
+		}
+	}
+}
+
+func containsStr(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // TestFetchAllCaching asserts clones of one project trigger exactly one fetch
@@ -114,7 +151,7 @@ func TestFetchAllCaching(t *testing.T) {
 		"github.com/org/alpha", // clone 2 (same project → deduped)
 		"github.com/org/beta",
 	}
-	got := FetchAll(context.Background(), ids, factory)
+	got := FetchAll(context.Background(), ids, "@me", factory)
 
 	if len(calls) != 2 {
 		t.Errorf("expected 2 fetches (alpha deduped + beta), got %d: %v", len(calls), calls)
@@ -136,7 +173,7 @@ func TestFetchAllSkipsNonGithub(t *testing.T) {
 		"local:/Users/tom/repos/scratch",
 		"",
 	}
-	got := FetchAll(context.Background(), ids, factory)
+	got := FetchAll(context.Background(), ids, "@me", factory)
 	if len(calls) != 1 {
 		t.Errorf("expected only the github identity to be fetched, got %d: %v", len(calls), calls)
 	}
@@ -154,17 +191,17 @@ func TestFetchAllFailSilently(t *testing.T) {
 	factory := func(_, _ string) Runner {
 		return fakeRunner("", errors.New("boom"))
 	}
-	got := FetchAll(context.Background(), []string{"github.com/org/alpha"}, factory)
+	got := FetchAll(context.Background(), []string{"github.com/org/alpha"}, "@me", factory)
 	if len(got) != 0 {
 		t.Errorf("failed fetch should produce no entry, got %+v", got)
 	}
 }
 
 func TestFetchAllEmpty(t *testing.T) {
-	if got := FetchAll(context.Background(), nil, nil); len(got) != 0 {
+	if got := FetchAll(context.Background(), nil, "@me", nil); len(got) != 0 {
 		t.Errorf("no identities → no results, got %+v", got)
 	}
-	got := FetchAll(context.Background(), []string{"local:/x"}, nil)
+	got := FetchAll(context.Background(), []string{"local:/x"}, "@me", nil)
 	if got == nil || len(got) != 0 {
 		t.Errorf("non-github identities → empty non-nil map, got %+v", got)
 	}
@@ -199,7 +236,7 @@ func TestPRsSmoke(t *testing.T) {
 	if len(ids) == 0 {
 		t.Skip("no github.com projects found")
 	}
-	got := FetchAll(ctx, ids, nil)
+	got := FetchAll(ctx, ids, "@me", nil)
 	if len(got) == 0 {
 		t.Error("expected PR results for github projects")
 	}
@@ -209,7 +246,7 @@ func TestPRsSmoke(t *testing.T) {
 		total += len(prs)
 		t.Logf("%s: %d open PRs", id, len(prs))
 		for _, p := range prs {
-			t.Logf("  #%d [%s] %s (+%d -%d)", p.Number, p.State, p.Title, p.Additions, p.Deletions)
+			t.Logf("  #%d [%s] %s by %s (+%d -%d)", p.Number, p.State, p.Title, p.Author, p.Additions, p.Deletions)
 		}
 	}
 	t.Logf("projects=%d total open PRs=%d", len(ids), total)
