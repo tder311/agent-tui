@@ -27,7 +27,7 @@ var helpEntries = []helpEntry{
 	{"enter / return / space", "Expand/collapse repo or section"},
 	{"tab", "Cycle focus (nav ↔ content)"},
 	{"/", "Filter tree (esc clears)"},
-	{"o", "Open worktree / session / live agent in a new terminal tab"},
+	{"o", "Open worktree / session / live agent in a new terminal tab; open a pull request in the browser"},
 	{"d", "Remove worktree (confirms; force-offer if dirty)"},
 	{"D", "Delete branch (confirms; -D offer if unmerged)"},
 	{"p", "Prune stale worktrees in repo"},

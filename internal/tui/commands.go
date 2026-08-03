@@ -8,6 +8,7 @@ import (
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/config"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 const scanTimeout = 60 * time.Second
@@ -19,8 +20,10 @@ func tickCmd(d time.Duration) tea.Cmd {
 }
 
 // scanCmd runs the entire discovery in the background: sweep for .git markers,
-// group into repos, enrich worktrees/branches, discover agent sessions and
-// live agents. Never blocks the UI; never mutates anything.
+// group into repos, enrich worktrees/branches, discover agent sessions, live
+// agents, and open pull requests for each github.com project. Never blocks the
+// UI; never mutates anything. PR fetches are best-effort and cached once per
+// distinct project identity.
 func scanCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
@@ -33,8 +36,25 @@ func scanCmd(cfg *config.Config) tea.Cmd {
 			agents.WithMaxPerClone(cfg.SessionCapValue()),
 		)
 		live := agents.AttributeLive(agents.LiveAgents(ctx), repoDirs)
-		return ScanResultMsg{Data: data, Sessions: sessions, Live: live, At: time.Now()}
+		prsByID := prs.FetchAll(ctx, distinctIdentities(data), nil)
+		return ScanResultMsg{Data: data, Sessions: sessions, Live: live, PRs: prsByID, At: time.Now()}
 	}
+}
+
+// distinctIdentities returns the distinct project identities of a scan, so PRs
+// are fetched once per project and reused across its clones.
+func distinctIdentities(data []gitx.RepoData) []string {
+	seen := make(map[string]bool, len(data))
+	var out []string
+	for _, rd := range data {
+		id := rd.Repo.Origin.Identity
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // performActionCmd executes a confirmed destructive action.
@@ -77,6 +97,13 @@ func performActionCmd(req actionRequest) tea.Cmd {
 // openTerminalCmd opens a new terminal tab in dir, optionally launching a tool.
 func openTerminalCmd(termApp, dir, toolCmd string) tea.Cmd {
 	return func() tea.Msg {
-		return OpenResultMsg{Err: openInTerminal(termApp, dir, toolCmd)}
+		return OpenResultMsg{Kind: openTerminal, Err: openInTerminal(termApp, dir, toolCmd)}
+	}
+}
+
+// openBrowserCmd opens a URL in the default browser.
+func openBrowserCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		return OpenResultMsg{Kind: openBrowser, Err: openInBrowser(url)}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/config"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 type navEntryKind int
@@ -24,6 +25,7 @@ const (
 	navKindBranch
 	navKindSession
 	navKindLiveAgent // a running agent (`claude agents --json`)
+	navKindPR        // an open pull request of a github.com project
 )
 
 type sectionKind int
@@ -33,6 +35,7 @@ const (
 	sectionBranches
 	sectionLive
 	sectionAgents
+	sectionPRs
 )
 
 func (s sectionKind) title() string {
@@ -43,6 +46,8 @@ func (s sectionKind) title() string {
 		return "Branches"
 	case sectionLive:
 		return "Agents (live)"
+	case sectionPRs:
+		return "Pull requests"
 	default:
 		return "Agents"
 	}
@@ -117,6 +122,17 @@ func buildProjects(data []gitx.RepoData) []projectNode {
 	return projects
 }
 
+// projectPRs returns the open PRs for a project and whether the project is
+// eligible for a Pull requests section. Only github.com projects qualify;
+// local and non-github projects never get one. A failed PR fetch yields an
+// empty (possibly nil) slice, degrading to the "No open PRs" empty state.
+func (m navTreeModel) projectPRs(p *projectNode) ([]prs.PR, bool) {
+	if p.local || p.origin.Host != "github.com" {
+		return nil, false
+	}
+	return m.prs[p.origin.Identity], true
+}
+
 // cloneLabelsFor returns a display label per clone: the parent-dir shorthand
 // ("~/repos"). When two clones of a project share a parent dir, the full path
 // is used instead so the clones stay distinguishable.
@@ -175,6 +191,7 @@ type navTreeModel struct {
 	filter      string
 	selID       string
 	cfg         *config.Config
+	prs         map[string][]prs.PR // open PRs keyed by project identity
 }
 
 func newNavTreeModel(width int) navTreeModel {
@@ -208,8 +225,9 @@ func (m navTreeModel) isCollapsed(e navEntry) bool {
 
 // rebuild reconstructs the flat entry list from scan data, honoring collapse
 // state and filter, and restores the cursor to the previously selected entry.
-func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent) navTreeModel {
+func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR) navTreeModel {
 	m.entries = nil
+	m.prs = prsMap
 	filter := strings.ToLower(strings.TrimSpace(m.filter))
 
 	projects := buildProjects(data)
@@ -365,6 +383,34 @@ func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents
 			cloneEntries = append(cloneEntries, ce)
 		}
 
+		// Pull requests live at the project level (they belong to the origin
+		// repo, not to any single clone). The section appears only for
+		// github.com projects; zero open PRs (or a failed fetch) yield a
+		// "No open PRs" empty-state row.
+		var prEntries []navEntry
+		if prsFor, ok := m.projectPRs(&p); ok {
+			for pi, pr := range prsFor {
+				if filter != "" && !match(pr.Title) && !match(strconv.Itoa(pr.Number)) {
+					continue
+				}
+				prEntries = append(prEntries, navEntry{
+					kind: navKindPR, depth: 2, projID: p.origin.Identity,
+					section: sectionPRs, itemIdx: pi,
+					label: fmt.Sprintf("#%d  %s", pr.Number, pr.Title),
+					badge: prStateBadge(pr),
+					id:    p.origin.Identity + "|pr:" + strconv.Itoa(pr.Number),
+				})
+			}
+			if len(prsFor) == 0 && (filter == "" || match("no open prs")) {
+				prEntries = append(prEntries, navEntry{
+					kind: navKindPR, depth: 2, projID: p.origin.Identity,
+					section: sectionPRs, itemIdx: -1,
+					label: "No open PRs",
+					id:    p.origin.Identity + "|pr:empty",
+				})
+			}
+		}
+
 		anyClone := false
 		for _, ce := range cloneEntries {
 			if ce.matches {
@@ -372,7 +418,7 @@ func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents
 				break
 			}
 		}
-		if filter != "" && !match(p.name) && !anyClone {
+		if filter != "" && !match(p.name) && !anyClone && len(prEntries) == 0 {
 			continue
 		}
 
@@ -408,6 +454,19 @@ func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents
 					continue
 				}
 				m.entries = append(m.entries, se.entries...)
+			}
+		}
+
+		// Project-level Pull requests section, after the clones.
+		if len(prEntries) > 0 {
+			prsSec := navEntry{
+				kind: navKindSection, depth: 1, projID: p.origin.Identity,
+				section: sectionPRs, label: sectionPRs.title(),
+				id: p.origin.Identity + "|sec:" + strconv.Itoa(int(sectionPRs)),
+			}
+			m.entries = append(m.entries, prsSec)
+			if !m.isCollapsed(prsSec) {
+				m.entries = append(m.entries, prEntries...)
 			}
 		}
 	}

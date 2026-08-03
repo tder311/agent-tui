@@ -12,10 +12,10 @@ import (
 // set) carries the ⚙ gear badge in the nav and a full title + agent row in
 // its detail pane. Interactive sessions never show the gear.
 func TestAgentSessionBadge(t *testing.T) {
-	data, sessions, live := fakeData()
+	data, sessions, live, prsByID := fakeData()
 	m := appModel{
 		width: 120, height: 40, ready: true,
-		nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live,
+		nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID,
 	}
 	m.layout()
 	m.rebuildNav()
@@ -69,13 +69,13 @@ func TestAgentSessionBadge(t *testing.T) {
 }
 
 func TestRenderScenarios(t *testing.T) {
-	data, sessions, live := fakeData()
+	data, sessions, live, prsByID := fakeData()
 	m := NewApp().(appModel)
 
 	// Window size + data loaded.
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: 110, Height: 32})
 	m = tm.(appModel)
-	tm, _ = m.Update(ScanResultMsg{Data: data, Sessions: sessions, Live: live, At: time.Now()})
+	tm, _ = m.Update(ScanResultMsg{Data: data, Sessions: sessions, Live: live, PRs: prsByID, At: time.Now()})
 	m = tm.(appModel)
 
 	v := m.View()

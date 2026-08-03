@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/config"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 // renderTable lays out rows under headers, distributing width across columns
@@ -91,7 +93,7 @@ func kv(key, val string) string {
 }
 
 // renderDetail produces the right-pane content for the current selection.
-func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, width int, cfg *config.Config) string {
+func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, width int, cfg *config.Config) string {
 	e := nav.selectedEntry()
 	if e == nil {
 		return dimStyle.Render("No repos discovered.\n\nagent-tui sweeps your configured scan roots\nfor .git markers (default: ~), so any app's\nworktrees are found. Press r to rescan.")
@@ -107,7 +109,7 @@ func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][
 
 	switch e.kind {
 	case navKindProject:
-		return projectDetail(e, nav, data, sessions, live, w, cfg)
+		return projectDetail(e, nav, data, sessions, live, prsMap, w, cfg)
 	case navKindClone:
 		return repoDetail(rd, sessions[rd.Repo.Path], live[rd.Repo.Path], w, cfg)
 	case navKindSection:
@@ -118,6 +120,8 @@ func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][
 			return branchesTable(rd, w)
 		case sectionLive:
 			return liveAgentsTable(live[rd.Repo.Path], w)
+		case sectionPRs:
+			return prsTable(prsMap[e.projID], w)
 		default:
 			return sessionsTable(sessions[rd.Repo.Path], w)
 		}
@@ -139,13 +143,22 @@ func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][
 		if e.itemIdx < len(la) {
 			return liveAgentDetail(la[e.itemIdx], w)
 		}
+	case navKindPR:
+		p := prsMap[e.projID]
+		if e.itemIdx < 0 {
+			return dimStyle.Render("No open pull requests for this project.")
+		}
+		if e.itemIdx < len(p) {
+			return prDetail(p[e.itemIdx], w)
+		}
 	}
 	return ""
 }
 
 // projectDetail renders a project node: its origin, aggregate counts, a
-// compact per-clone summary, and any live agents running across the project.
-func projectDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, w int, cfg *config.Config) string {
+// compact per-clone summary, its open PRs, and any live agents running across
+// the project.
+func projectDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, w int, cfg *config.Config) string {
 	var p *projectNode
 	for i := range nav.projects {
 		if nav.projects[i].origin.Identity == e.projID {
@@ -172,11 +185,16 @@ func projectDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, session
 		sess += len(sessions[rd.Repo.Path])
 		liveN += len(live[rd.Repo.Path])
 	}
+	prsN := 0
+	if _, eligible := nav.projectPRs(p); eligible {
+		prsN = len(prsMap[p.origin.Identity])
+	}
 	b.WriteString(kv("Clones", fmt.Sprintf("%d", clones)) + "   " +
 		kv("Worktrees", fmt.Sprintf("%d", worktrees)) + "   " +
 		kv("Branches", fmt.Sprintf("%d", branches)) + "   " +
 		kv("Sessions", fmt.Sprintf("%d", sess)) + "   " +
-		kv("Live", fmt.Sprintf("%d", liveN)) + "\n\n")
+		kv("Live", fmt.Sprintf("%d", liveN)) + "   " +
+		kv("PRs", fmt.Sprintf("%d", prsN)) + "\n\n")
 
 	b.WriteString(tableHeaderStyle.Render("CLONES") + "\n")
 	for i, ci := range p.clones {
@@ -191,6 +209,11 @@ func projectDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, session
 		if rd.Err != nil {
 			b.WriteString(errorStyle.Render("    scan error: "+rd.Err.Error()) + "\n")
 		}
+	}
+
+	if prsN > 0 {
+		b.WriteString("\n" + tableHeaderStyle.Render("PULL REQUESTS") + "\n")
+		b.WriteString(prsTable(prsMap[p.origin.Identity], w))
 	}
 
 	if liveN > 0 {
@@ -361,6 +384,52 @@ func sessionsTable(sess []agents.Session, w int) string {
 	}
 	return renderTable(w, []string{"TOOL", "TITLE", "UPDATED", "MSGS", "DIR"},
 		[]float64{1.2, 3, 1.2, 0.8, 3}, rows)
+}
+
+// prsTable lists a project's open pull requests.
+func prsTable(prsList []prs.PR, w int) string {
+	if len(prsList) == 0 {
+		return dimStyle.Render("No open pull requests.")
+	}
+	rows := make([][]string, 0, len(prsList))
+	for _, p := range prsList {
+		delta := ""
+		if p.Additions > 0 || p.Deletions > 0 {
+			delta = fmt.Sprintf("+%d −%d", p.Additions, p.Deletions)
+		}
+		rows = append(rows, []string{
+			prStateBadge(p),
+			"#" + strconv.Itoa(p.Number) + "  " + p.Title,
+			p.HeadRef + " → " + p.BaseRef,
+			delta,
+			relTime(p.UpdatedAt),
+		})
+	}
+	return renderTable(w, []string{"STATE", "PR", "BRANCHES", "DIFF", "UPDATED"},
+		[]float64{1.2, 3.2, 2.2, 1, 1.2}, rows)
+}
+
+// prDetail renders one pull request.
+func prDetail(p prs.PR, w int) string {
+	var b strings.Builder
+	title := fmt.Sprintf("#%d  %s", p.Number, p.Title)
+	b.WriteString(headerStyle.Render(" "+truncate(title, w-4)+" ") + "\n\n")
+	b.WriteString(kv("State", prStateBadge(p)) + "\n")
+	if p.IsDraft {
+		b.WriteString(kv("Draft", dimStyle.Render("yes")) + "\n")
+	}
+	b.WriteString(kv("Branches", p.HeadRef+" → "+p.BaseRef) + "\n")
+	b.WriteString(kv("Author", p.Author) + "\n")
+	b.WriteString(kv("URL", truncate(p.URL, w-16)) + "\n")
+	if !p.CreatedAt.IsZero() {
+		b.WriteString(kv("Created", p.CreatedAt.Format("2006-01-02 15:04:05")) + "\n")
+	}
+	if !p.UpdatedAt.IsZero() {
+		b.WriteString(kv("Updated", p.UpdatedAt.Format("2006-01-02 15:04:05")+" ("+relTime(p.UpdatedAt)+")") + "\n")
+	}
+	b.WriteString(kv("Diff", fmt.Sprintf("+%d additions  −%d deletions", p.Additions, p.Deletions)) + "\n")
+	b.WriteString("\n" + dimStyle.Render("o open PR in browser   r refresh"))
+	return b.String()
 }
 
 func worktreeDetail(wt gitx.Worktree, w int, cfg *config.Config) string {

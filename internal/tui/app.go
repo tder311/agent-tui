@@ -12,6 +12,7 @@ import (
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/config"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 const navWidth = 36
@@ -33,6 +34,7 @@ type appModel struct {
 	data     []gitx.RepoData
 	sessions map[string][]agents.Session // historical, keyed by repo path
 	live     map[string][]agents.Agent   // running agents, keyed by repo path
+	prs      map[string][]prs.PR         // open PRs, keyed by project identity
 
 	scanning bool
 	lastScan time.Time
@@ -66,6 +68,7 @@ func NewApp() tea.Model {
 		filter:     ti,
 		sessions:   make(map[string][]agents.Session),
 		live:       make(map[string][]agents.Agent),
+		prs:        make(map[string][]prs.PR),
 	}
 }
 
@@ -145,6 +148,7 @@ func (m appModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.data = msg.Data
 		m.sessions = msg.Sessions
 		m.live = msg.Live
+		m.prs = msg.PRs
 		m.nav.loading = false
 		m.rebuildNav()
 		return m, nil
@@ -184,7 +188,13 @@ func (m appModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OpenResultMsg:
 		if msg.Err != nil {
-			m.setErr(fmt.Errorf("open terminal: %w", msg.Err))
+			if msg.Kind == openBrowser {
+				m.setErr(fmt.Errorf("open browser: %w", msg.Err))
+			} else {
+				m.setErr(fmt.Errorf("open terminal: %w", msg.Err))
+			}
+		} else if msg.Kind == openBrowser {
+			m.setStatus("opened in browser")
 		} else {
 			m.setStatus("opened in terminal")
 		}
@@ -299,13 +309,13 @@ func (m *appModel) rebuildNav() {
 	m.nav.rememberSelection()
 	m.nav.focused = m.focusIndex == 0
 	m.nav.cfg = m.cfg
-	m.nav = m.nav.rebuild(m.data, m.sessions, m.live)
+	m.nav = m.nav.rebuild(m.data, m.sessions, m.live, m.prs)
 	m.refreshDetail(false)
 }
 
 // refreshDetail recomputes the right-pane content for the current selection.
 func (m *appModel) refreshDetail(gotoTop bool) {
-	content := renderDetail(&m.nav, m.data, m.sessions, m.live, m.vp.Width, m.cfg)
+	content := renderDetail(&m.nav, m.data, m.sessions, m.live, m.prs, m.vp.Width, m.cfg)
 	m.vp.SetContent(content)
 	if gotoTop {
 		m.vp.GotoTop()
@@ -347,8 +357,20 @@ func (m appModel) openSelected() (tea.Model, tea.Cmd) {
 		}
 		a := la[e.itemIdx]
 		return m, openTerminalCmd(string(m.cfg.Terminal), a.Cwd, "claude --resume "+a.ID)
+	case navKindPR:
+		p := m.prs[e.projID]
+		if e.itemIdx < 0 || e.itemIdx >= len(p) {
+			m.setStatus("select a pull request to open")
+			return m, nil
+		}
+		pr := p[e.itemIdx]
+		if pr.URL == "" {
+			m.setStatus("this PR has no URL")
+			return m, nil
+		}
+		return m, openBrowserCmd(pr.URL)
 	default:
-		m.setStatus("select a worktree or agent session to open")
+		m.setStatus("select a worktree, session or pull request to open")
 		return m, nil
 	}
 }
@@ -474,11 +496,15 @@ func (m appModel) headerView() string {
 	for _, la := range m.live {
 		nLive += len(la)
 	}
+	nPRs := 0
+	for _, p := range m.prs {
+		nPRs += len(p)
+	}
 	scanState := ""
 	if m.scanning {
 		scanState = "  " + statusCyan.Render("scanning…")
 	}
-	left := fmt.Sprintf(" agent-tui — %d projects · %d clones · %d sessions · %d live", nProjects, len(m.data), nSessions, nLive)
+	left := fmt.Sprintf(" agent-tui — %d projects · %d clones · %d sessions · %d live · %d PRs", nProjects, len(m.data), nSessions, nLive, nPRs)
 	right := ""
 	if !m.lastScan.IsZero() {
 		right = dimStyle.Render("updated " + m.lastScan.Format("15:04:05")) + " "
