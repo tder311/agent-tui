@@ -6,9 +6,10 @@ import (
 
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
-func fakeData() ([]gitx.RepoData, map[string][]agents.Session, map[string][]agents.Agent) {
+func fakeData() ([]gitx.RepoData, map[string][]agents.Session, map[string][]agents.Agent, map[string][]prs.PR) {
 	alphaOrigin := gitx.Origin{HasRemote: true, Identity: "github.com/org/alpha", Slug: "alpha", Host: "github.com"}
 	data := []gitx.RepoData{
 		{
@@ -60,7 +61,25 @@ func fakeData() ([]gitx.RepoData, map[string][]agents.Session, map[string][]agen
 			{Tool: "claude", ID: "sess-fg-1", Name: "worktrees-9f", Cwd: "/conductor/repos/alpha", Kind: "interactive", Status: "idle"},
 		},
 	}
-	return data, sessions, live
+	prsByID := map[string][]prs.PR{
+		"github.com/org/alpha": {
+			{
+				Number: 123, Title: "fix scan timeout", State: prs.StateOpen, IsDraft: false,
+				HeadRef: "fix/scan-timeout", BaseRef: "main", Author: "tder311",
+				CreatedAt: time.Now().Add(-48 * time.Hour), UpdatedAt: time.Now().Add(-2 * time.Hour),
+				Additions: 120, Deletions: 45, URL: "https://github.com/org/alpha/pull/123",
+			},
+			{
+				Number: 127, Title: "wip: prs section", State: prs.StateDraft, IsDraft: true,
+				HeadRef: "feat/pull-requests", BaseRef: "main", Author: "tder311",
+				CreatedAt: time.Now().Add(-24 * time.Hour), UpdatedAt: time.Now().Add(-time.Hour),
+				Additions: 900, Deletions: 10, URL: "https://github.com/org/alpha/pull/127",
+			},
+		},
+		// beta is github.com but has zero open PRs → empty state row.
+		"github.com/org/beta": {},
+	}
+	return data, sessions, live, prsByID
 }
 
 type fakeErr string
@@ -72,7 +91,7 @@ var errFake = fakeErr("repo vanished")
 // TestRenderAllSelections walks every nav entry and renders its detail pane,
 // catching panics in the rendering paths.
 func TestRenderAllSelections(t *testing.T) {
-	data, sessions, live := fakeData()
+	data, sessions, live, prsByID := fakeData()
 	m := appModel{
 		width:    120,
 		height:   40,
@@ -81,6 +100,7 @@ func TestRenderAllSelections(t *testing.T) {
 		data:     data,
 		sessions: sessions,
 		live:     live,
+		prs:      prsByID,
 	}
 	m.layout()
 	m.rebuildNav()
@@ -101,8 +121,8 @@ func TestRenderAllSelections(t *testing.T) {
 }
 
 func TestCollapseAndFilter(t *testing.T) {
-	data, sessions, live := fakeData()
-	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live}
+	data, sessions, live, prsByID := fakeData()
+	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID}
 	m.layout()
 	m.rebuildNav()
 
@@ -142,8 +162,8 @@ func TestCollapseAndFilter(t *testing.T) {
 }
 
 func TestSelectionPreservedAcrossRebuild(t *testing.T) {
-	data, sessions, live := fakeData()
-	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live}
+	data, sessions, live, prsByID := fakeData()
+	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID}
 	m.rebuildNav()
 	m.nav.collapsed = map[string]bool{} // expand all
 	m.rebuildNav()
@@ -162,8 +182,8 @@ func TestSelectionPreservedAcrossRebuild(t *testing.T) {
 }
 
 func TestActionRequests(t *testing.T) {
-	data, sessions, live := fakeData()
-	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live}
+	data, sessions, live, prsByID := fakeData()
+	m := appModel{nav: newNavTreeModel(navWidth), data: data, sessions: sessions, live: live, prs: prsByID}
 	m.rebuildNav()
 	m.nav.collapsed = map[string]bool{} // expand all
 	m.rebuildNav()

@@ -5,6 +5,7 @@ import (
 
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 // TickMsg fires the periodic auto-refresh.
@@ -15,6 +16,7 @@ type ScanResultMsg struct {
 	Data     []gitx.RepoData
 	Sessions map[string][]agents.Session // historical, keyed by repo path
 	Live     map[string][]agents.Agent   // running agents, keyed by repo path
+	PRs      map[string][]prs.PR         // open PRs, keyed by project identity
 	At       time.Time
 }
 
@@ -51,7 +53,16 @@ type ActionResultMsg struct {
 	Err        error
 }
 
-// OpenResultMsg reports the outcome of opening a terminal tab.
+// openKind distinguishes what an OpenResultMsg opened.
+type openKind int
+
+const (
+	openTerminal openKind = iota
+	openBrowser
+)
+
+// OpenResultMsg reports the outcome of an `o` action (terminal tab or browser).
 type OpenResultMsg struct {
-	Err error
+	Kind openKind
+	Err  error
 }

@@ -19,6 +19,7 @@ On first run a config file is created at `~/.config/agent-tui/config.json` with 
 - **Branches** — upstream, tracking, checked-out location, last commit; `D` deletes (y/n confirm, `-D` offer when unmerged)
 - **Agents** — Claude Code sessions (from `~/.claude/projects`) and OpenCode sessions (from the OpenCode sqlite db, read-only) matched to repos/worktrees by directory, with real titles (renamed/auto-titled names from the session files and the Claude jobs registry) instead of raw UUIDs; `o` opens/resumes the session in a terminal. Sessions launched by *background agents* are hidden by default (`include_agent_sessions: false`) so the historical list stays focused on interactive work — turn it on to see them with a ⚙ badge and their task name
 - **Live agents** — the agents actually *running right now*, from the official Claude local API (`claude agents --json`), shown in a distinct **Agents (live)** section with a status dot (busy = green, idle = gray, blocked = yellow) and a `bg`/`fg` (background/interactive) tag; `o` resumes the agent with `claude --resume <sessionId>`. If `claude` isn't on your PATH this section simply doesn't appear — you keep the historical sessions only
+- **Pull requests** — open PRs for each `github.com` project (via the `gh` CLI), listed in a **Pull requests** section under the project with state badges (open = green, draft = gray, merged/closed faded), author, head → base refs, and +/- additions/deletions; `o` opens a PR in your browser. Fetched once per project and shared across its clones, so N clones cost one `gh` call. If `gh` isn't installed or a repo has no remote, the section just doesn't appear
 - **Prune** — `p` runs `git worktree prune` per repo (with confirm)
 - **Auto-refresh** — background rescan every 10s (configurable) plus `r` manual refresh; all git/fs I/O runs off the UI thread with timeouts
 - **Help** — `?` for full keybindings
@@ -39,7 +40,7 @@ Clones of the same upstream are grouped into a single **project**. Grouping is b
 
 (`.git` suffixes, trailing slashes, ports, scheme and host casing are all folded; the repo name for display is taken from the URL.) Expand a project to see each clone, labelled by its parent dir (`~/repos`, `~/conductor/repos`) — when two clones share a parent, the full path is shown instead. Repos with **no remote** get a `local:<path>` identity, show up as their own project flagged `local`, and are easy to exclude via `skip`.
 
-Selecting a **project** shows an overview pane: its origin URL, aggregate worktree/branch/session/live-agent counts across all clones, a compact per-clone summary line, and the live agents running anywhere in the project.
+Selecting a **project** shows an overview pane: its origin URL, aggregate worktree/branch/session/live-agent/PR counts across all clones, a compact per-clone summary line, the live agents running anywhere in the project, and its open pull requests.
 
 ### Data sources
 
@@ -49,6 +50,7 @@ Selecting a **project** shows an overview pane: its origin URL, aggregate worktr
 - `~/.claude/projects/<slug>/*.jsonl` — Claude Code sessions (mtime = last activity, lines = messages; titles from `custom-title`/`ai-title`/last-prompt events)
 - `~/.claude/jobs/<id>/state.json` — the Claude jobs registry: identifies background-agent sessions (`nameSource: "auto"`) and carries their real task name. Used to hide agent sessions by default and to name sessions the user renamed (`nameSource: "user"`)
 - `claude agents --json` — **live** Claude Code agents (background + interactive), attributed to the deepest known worktree (agents launched from a shared parent like `~/.claude/worktrees` resolve to the owning clone). Best-effort: missing `claude` or a nonzero exit yields zero live agents, never an error
+- `gh pr list` per distinct github.com project origin — open pull requests (best-effort: missing `gh`, nonzero exit, or a non-github origin yields no PRs, never an error)
 - `~/.local/share/opencode/opencode.db` — OpenCode sessions (opened read-only; skipped gracefully if unavailable)
 - `~/.config/opencode/orchestrator/repos.json` — only used to add an `opencode` spawner for the orchestrator's worktree root
 

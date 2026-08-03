@@ -7,6 +7,7 @@ import (
 	"github.com/tder311/agent-tui/internal/agents"
 	"github.com/tder311/agent-tui/internal/config"
 	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 var (
@@ -205,6 +206,21 @@ func dirtyMark(dirty bool) string {
 		return statusYellow.Render("✱ dirty")
 	}
 	return statusGreen.Render("✓ clean")
+}
+
+// prStateBadge is the colored state marker for a pull request: open = green,
+// draft = dim/gray, merged = purple, closed = red.
+func prStateBadge(p prs.PR) string {
+	switch p.State {
+	case prs.StateDraft:
+		return dimStyle.Render("[draft]")
+	case prs.StateMerged:
+		return lipgloss.NewStyle().Foreground(clrPurple).Bold(true).Render("merged")
+	case prs.StateClosed:
+		return statusRed.Render("closed")
+	default:
+		return statusGreen.Render("open")
+	}
 }
 
 // truncate shortens s to fit width w (in cells), adding an ellipsis.

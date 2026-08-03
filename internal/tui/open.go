@@ -50,6 +50,24 @@ end tell`, appleScriptEscape(shellCmd))
 	return nil
 }
 
+// openInBrowser opens url in the default browser via the macOS `open` command.
+func openInBrowser(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "open", url)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return fmt.Errorf("open: %s", detail)
+		}
+		return fmt.Errorf("open: %w", err)
+	}
+	return nil
+}
+
+// openBrowserFn opens a URL in the browser; overridable in tests.
+var openBrowserFn = openInBrowser
+
 // resolveTerminalApp turns "auto" into a concrete app based on what's installed.
 func resolveTerminalApp(termApp string) config.TerminalApp {
 	switch config.TerminalApp(termApp) {
