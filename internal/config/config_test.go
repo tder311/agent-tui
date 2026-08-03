@@ -105,6 +105,9 @@ func TestDefaultsApplied(t *testing.T) {
 	if got := cfg.SessionCapValue(); got != 50 {
 		t.Errorf("session_cap default = %d, want 50", got)
 	}
+	if got := cfg.PRSAuthorValue(); got != "@me" {
+		t.Errorf("prs_author default = %q, want @me", got)
+	}
 	// Explicit 0 must stay 0 (unlimited), not be overwritten by defaults.
 	zero := 0
 	cfg3 := &Config{SessionDays: &zero, SessionCap: &zero}
@@ -114,6 +117,19 @@ func TestDefaultsApplied(t *testing.T) {
 	}
 	if got := cfg3.SessionCapValue(); got != 0 {
 		t.Errorf("explicit session_cap=0 should stay 0, got %d", got)
+	}
+	// Explicit prs_author is preserved; "" means all PRs.
+	me := "@me"
+	all := ""
+	cfg4 := &Config{PRSAuthor: &me}
+	cfg4.applyDefaults()
+	if got := cfg4.PRSAuthorValue(); got != "@me" {
+		t.Errorf("prs_author @me should be preserved, got %q", got)
+	}
+	cfg5 := &Config{PRSAuthor: &all}
+	cfg5.applyDefaults()
+	if got := cfg5.PRSAuthorValue(); got != "" {
+		t.Errorf("prs_author \"\" (all) should be preserved, got %q", got)
 	}
 	// Custom spawners are preserved, not replaced by defaults.
 	cfg2 := &Config{Spawners: map[string]Spawner{"myapp": {Pattern: "/apps/myapp/", CLI: "myapp", Color: "green"}}}

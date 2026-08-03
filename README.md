@@ -19,7 +19,7 @@ On first run a config file is created at `~/.config/agent-tui/config.json` with 
 - **Branches** — upstream, tracking, checked-out location, last commit; `D` deletes (y/n confirm, `-D` offer when unmerged)
 - **Agents** — Claude Code sessions (from `~/.claude/projects`) and OpenCode sessions (from the OpenCode sqlite db, read-only) matched to repos/worktrees by directory, with real titles (renamed/auto-titled names from the session files and the Claude jobs registry) instead of raw UUIDs; `o` opens/resumes the session in a terminal. Sessions launched by *background agents* are hidden by default (`include_agent_sessions: false`) so the historical list stays focused on interactive work — turn it on to see them with a ⚙ badge and their task name
 - **Live agents** — the agents actually *running right now*, from the official Claude local API (`claude agents --json`), shown in a distinct **Agents (live)** section with a status dot (busy = green, idle = gray, blocked = yellow) and a `bg`/`fg` (background/interactive) tag; `o` resumes the agent with `claude --resume <sessionId>`. If `claude` isn't on your PATH this section simply doesn't appear — you keep the historical sessions only
-- **Pull requests** — open PRs for each `github.com` project (via the `gh` CLI), listed in a **Pull requests** section under the project with state badges (open = green, draft = gray, merged/closed faded), author, head → base refs, and +/- additions/deletions; `o` opens a PR in your browser. Fetched once per project and shared across its clones, so N clones cost one `gh` call. If `gh` isn't installed or a repo has no remote, the section just doesn't appear
+- **Pull requests** — open PRs for each `github.com` project (via the `gh` CLI), listed in a **Pull requests** section under the project with state badges (open = green, draft = gray, merged/closed faded), author, head → base refs, and +/- additions/deletions; `o` opens a PR in your browser. Only **your own** PRs are shown by default (`prs_author: "@me"`). Fetched once per project and shared across its clones, so N clones cost one `gh` call. If `gh` isn't installed or a repo has no remote, the section just doesn't appear
 - **Prune** — `p` runs `git worktree prune` per repo (with confirm)
 - **Auto-refresh** — background rescan every 10s (configurable) plus `r` manual refresh; all git/fs I/O runs off the UI thread with timeouts
 - **Help** — `?` for full keybindings
@@ -74,6 +74,7 @@ agent-tui is read-only by default: scanning never mutates any repo. The only mut
   "include_agent_sessions": false,
   "session_days": 30,
   "session_cap": 50,
+  "prs_author": "@me",
   "refresh_seconds": 10
 }
 ```
@@ -85,6 +86,7 @@ agent-tui is read-only by default: scanning never mutates any repo. The only mut
 - `include_agent_sessions` — list Claude sessions launched by background agents (detected via the jobs registry) alongside interactive ones. Default `false` keeps the historical Agents list free of agent noise; `true` shows them with a ⚙ badge and their task name
 - `session_days` — only show sessions updated within this many days (default `30`; `0` = unlimited)
 - `session_cap` — cap historical sessions per clone, most recent first (default `50`; `0` = unlimited)
+- `prs_author` — GitHub login to filter open PRs by (default `"@me"`, the authenticated gh user, so you see only your own PRs; a login shows another author; `""` shows everyone's)
 - `refresh_seconds` — auto-refresh interval (minimum 2)
 
 Legacy `scan_root` and `repo_roots` settings are still honored and merged into `scan_roots`.

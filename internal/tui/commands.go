@@ -36,7 +36,7 @@ func scanCmd(cfg *config.Config) tea.Cmd {
 			agents.WithMaxPerClone(cfg.SessionCapValue()),
 		)
 		live := agents.AttributeLive(agents.LiveAgents(ctx), repoDirs)
-		prsByID := prs.FetchAll(ctx, distinctIdentities(data), nil)
+		prsByID := prs.FetchAll(ctx, distinctIdentities(data), cfg.PRSAuthorValue(), nil)
 		return ScanResultMsg{Data: data, Sessions: sessions, Live: live, PRs: prsByID, At: time.Now()}
 	}
 }

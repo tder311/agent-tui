@@ -56,19 +56,31 @@ type Runner func(ctx context.Context) ([]byte, error)
 // Factory builds a Runner for a project; injectable for tests.
 type Factory func(owner, repo string) Runner
 
-// defaultRunner builds the `gh pr list` command for a project.
-func defaultRunner(owner, repo string) Runner {
+// defaultRunner builds the `gh pr list` command for a project. author filters
+// by the PR author: "@me" (the authenticated gh user), a specific login, or ""
+// for all authors.
+func defaultRunner(owner, repo, author string) Runner {
+	args := prListArgs(owner, repo, author)
+	return func(ctx context.Context) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, prTimeout)
+		defer cancel()
+		return exec.CommandContext(ctx, "gh", args...).Output()
+	}
+}
+
+// prListArgs builds the argv for `gh pr list`, appending the author filter
+// when one is given.
+func prListArgs(owner, repo, author string) []string {
 	args := []string{
 		"pr", "list",
 		"-R", owner + "/" + repo,
 		"--state", "open",
 		"--json", "number,title,isDraft,headRefName,baseRefName,author,createdAt,updatedAt,additions,deletions,url,state",
 	}
-	return func(ctx context.Context) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(ctx, prTimeout)
-		defer cancel()
-		return exec.CommandContext(ctx, "gh", args...).Output()
+	if author != "" {
+		args = append(args, "--author", author)
 	}
+	return args
 }
 
 // ParseProject splits a normalized origin identity ("host/owner/repo") into
@@ -136,14 +148,15 @@ func (r rawPR) toPR() PR {
 // ListPRs returns the open pull requests for a github.com project via the gh
 // CLI. Best-effort: a missing `gh` binary, a nonzero exit, or bad JSON all
 // yield an empty slice (never an error). runner is injectable for tests; nil
-// uses the real `gh pr list`. Non-github identities return empty.
-func ListPRs(ctx context.Context, originIdentity string, runner Runner) []PR {
+// uses the real `gh pr list` filtered to author. Non-github identities return
+// empty.
+func ListPRs(ctx context.Context, originIdentity, author string, runner Runner) []PR {
 	owner, repo, ok := ParseProject(originIdentity)
 	if !ok {
 		return nil
 	}
 	if runner == nil {
-		runner = defaultRunner(owner, repo)
+		runner = defaultRunner(owner, repo, author)
 	}
 	raw, err := runner(ctx)
 	if err != nil {
@@ -165,8 +178,9 @@ func ListPRs(ctx context.Context, originIdentity string, runner Runner) []PR {
 // capped to maxParallel concurrent gh calls. The result maps identity → PRs;
 // non-github/local identities are skipped. Never fails: a broken gh yields no
 // entry for the affected projects, and the caller's 60s scan budget is not
-// exceeded thanks to the per-call 5s cap.
-func FetchAll(ctx context.Context, identities []string, factory Factory) map[string][]PR {
+// exceeded thanks to the per-call 5s cap. author filters by PR author (see
+// ListPRs); factory is injectable for tests, nil uses the real gh CLI.
+func FetchAll(ctx context.Context, identities []string, author string, factory Factory) map[string][]PR {
 	out := make(map[string][]PR, len(identities))
 	var distinct []string
 	seen := make(map[string]bool, len(identities))
@@ -202,9 +216,9 @@ func FetchAll(ctx context.Context, identities []string, factory Factory) map[str
 			if factory != nil {
 				run = factory(owner, repo)
 			} else {
-				run = defaultRunner(owner, repo)
+				run = defaultRunner(owner, repo, author)
 			}
-			results <- result{id, ListPRs(ctx, id, run)}
+			results <- result{id, ListPRs(ctx, id, author, run)}
 		}(id)
 	}
 	wg.Wait()
