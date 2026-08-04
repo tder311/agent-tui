@@ -107,6 +107,9 @@ func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][
 	if e.kind == navKindSection && e.repoIdx < 0 {
 		return sectionAggregateDetail(e, nav, data, sessions, live, prsMap, w)
 	}
+	if e.kind == navKindEmpty {
+		return dimStyle.Render(e.label + " across all projects.")
+	}
 	if e.repoIdx < 0 || e.repoIdx >= len(data) {
 		return ""
 	}
