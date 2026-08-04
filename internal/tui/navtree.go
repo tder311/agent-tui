@@ -28,6 +28,23 @@ const (
 	navKindPR        // an open pull request of a github.com project
 )
 
+// viewMode selects the nav tree hierarchy: by project (project → clone →
+// sections) or by object (sections → project → items), where the sections are
+// Worktrees / Branches / Agents (live) / Agents / Pull requests.
+type viewMode int
+
+const (
+	viewByProject viewMode = iota
+	viewByObject
+)
+
+func (v viewMode) String() string {
+	if v == viewByObject {
+		return "by object"
+	}
+	return "by project"
+}
+
 type sectionKind int
 
 const (
@@ -166,6 +183,7 @@ type navEntry struct {
 	itemIdx int
 	label   string
 	badge   string // pre-rendered, e.g. spawner / dirty / tool
+	ctx     string // clone-label context (object view, multi-clone projects)
 	isWT    bool   // worktree row: render the WT tag prefix
 	id      string // stable identity across rebuilds
 }
@@ -187,9 +205,10 @@ type navTreeModel struct {
 	focused     bool
 	loading     bool
 	collapsed   map[string]bool
-	initialized bool // projects start collapsed on first rebuild
+	initViews   map[viewMode]bool // per-view collapse defaults seeded
 	filter      string
 	selID       string
+	view        viewMode
 	cfg         *config.Config
 	prs         map[string][]prs.PR // open PRs keyed by project identity
 }
@@ -198,6 +217,7 @@ func newNavTreeModel(width int) navTreeModel {
 	return navTreeModel{
 		width:     width,
 		collapsed: make(map[string]bool),
+		initViews: make(map[viewMode]bool),
 	}
 }
 
@@ -223,8 +243,9 @@ func (m navTreeModel) isCollapsed(e navEntry) bool {
 	return k != "" && m.collapsed[k]
 }
 
-// rebuild reconstructs the flat entry list from scan data, honoring collapse
-// state and filter, and restores the cursor to the previously selected entry.
+// rebuild reconstructs the flat entry list from scan data, honoring the
+// current view mode, collapse state and filter, and restores the cursor to the
+// previously selected entry.
 func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR) navTreeModel {
 	m.entries = nil
 	m.prs = prsMap
@@ -239,236 +260,31 @@ func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents
 		}
 	}
 
-	// First build: projects start collapsed so a machine with many clones
-	// stays navigable. Clones and sections expand within an expanded project.
-	if !m.initialized {
-		for _, p := range projects {
-			m.collapsed["proj:"+p.origin.Identity] = true
+	// Each view's projects start collapsed so a machine with many clones stays
+	// navigable; defaults are seeded once per view, user toggles win.
+	if !m.initViews[m.view] {
+		if m.view == viewByObject {
+			for _, sec := range objectSectionOrder {
+				for _, p := range projects {
+					m.collapsed["proj:"+objectProjID(sec, p.origin.Identity)] = true
+				}
+			}
+		} else {
+			for _, p := range projects {
+				m.collapsed["proj:"+p.origin.Identity] = true
+			}
 		}
-		m.initialized = true
+		m.initViews[m.view] = true
 	}
 
 	match := func(s string) bool {
 		return filter == "" || strings.Contains(strings.ToLower(s), filter)
 	}
 
-	type cloneEntry struct {
-		navEntry
-		matches  bool // clone or one of its children matches the filter
-		sections []secEntries
-	}
-
-	for _, p := range projects {
-		var cloneEntries []cloneEntry
-		for _, ci := range p.clones {
-			rd := data[ci]
-			repoID := rd.Repo.Path
-			var secs []secEntries
-
-			// Worktrees
-			var wtEntries []navEntry
-			for wi, wt := range rd.Worktrees {
-				label := wt.Branch
-				if label == "" {
-					label = "(detached " + wt.ShortSHA + ")"
-				}
-				if wt.Main {
-					label += " [main]"
-				}
-				if !match(label) && !match(wt.Path) {
-					continue
-				}
-				badge := spawnerStyle(wt.Spawner, spawnerColor(m.cfg, wt.Spawner)).Render(worktreeLabel(wt))
-				if wt.Dirty {
-					badge += " " + statusYellow.Render("✱")
-				}
-				if wt.Locked {
-					badge += " " + statusGray.Render("🔒")
-				}
-				wtEntries = append(wtEntries, navEntry{
-					kind: navKindWorktree, depth: 3, repoIdx: ci,
-					section: sectionWorktrees, itemIdx: wi,
-					label: label, badge: badge, isWT: true,
-					id: repoID + "|wt:" + wt.Path,
-				})
-			}
-			secs = append(secs, secEntries{sectionWorktrees, wtEntries})
-
-			// Branches
-			var brEntries []navEntry
-			for bi, br := range rd.Branches {
-				if !match(br.Name) {
-					continue
-				}
-				badge := ""
-				if br.Active() {
-					badge = statusCyan.Render("●")
-				}
-				brEntries = append(brEntries, navEntry{
-					kind: navKindBranch, depth: 3, repoIdx: ci,
-					section: sectionBranches, itemIdx: bi,
-					label: br.Name, badge: badge,
-					id: repoID + "|br:" + br.Name,
-				})
-			}
-			secs = append(secs, secEntries{sectionBranches, brEntries})
-
-			// Live agents (running now) — distinct from historical sessions.
-			var liveEntries []navEntry
-			for li, a := range live[repoID] {
-				if !match(a.Name) && !match(a.Cwd) && !match(a.Status) && !match(a.State) {
-					continue
-				}
-				label := a.Name
-				if label == "" {
-					label = a.ID
-				}
-				liveEntries = append(liveEntries, navEntry{
-					kind: navKindLiveAgent, depth: 3, repoIdx: ci,
-					section: sectionLive, itemIdx: li,
-					label: label, badge: liveBadge(a),
-					id: repoID + "|live:" + a.ID,
-				})
-			}
-			if len(liveEntries) > 0 {
-				secs = append(secs, secEntries{sectionLive, liveEntries})
-			}
-
-			// Agent sessions
-			var agEntries []navEntry
-			for si, s := range sessions[repoID] {
-				if !match(s.Title) && !match(s.Dir) && !match(s.Tool) {
-					continue
-				}
-				var badge string
-				if s.AgentName != "" {
-					badge = gearStyle.Render("⚙") + " "
-				}
-				if s.Tool == "claude" {
-					badge += statusOrange.Render("claude")
-				} else {
-					badge += statusGreen.Render("opencode")
-				}
-				agEntries = append(agEntries, navEntry{
-					kind: navKindSession, depth: 3, repoIdx: ci,
-					section: sectionAgents, itemIdx: si,
-					label: s.Title, badge: badge,
-					id: repoID + "|ag:" + s.Tool + ":" + s.ID,
-				})
-			}
-			secs = append(secs, secEntries{sectionAgents, agEntries})
-
-			anyChild := false
-			for _, se := range secs {
-				if len(se.entries) > 0 {
-					anyChild = true
-					break
-				}
-			}
-			cloneLabel := m.cloneLabels[repoID]
-			cloneMatches := match(cloneLabel) || match(repoID) || anyChild
-			if filter != "" && !cloneMatches {
-				continue
-			}
-
-			ce := cloneEntry{
-				navEntry: navEntry{
-					kind: navKindClone, depth: 1, repoIdx: ci,
-					projID: p.origin.Identity,
-					label:  cloneLabel, id: repoID,
-				},
-				matches:  cloneMatches,
-				sections: secs,
-			}
-			cloneEntries = append(cloneEntries, ce)
-		}
-
-		// Pull requests live at the project level (they belong to the origin
-		// repo, not to any single clone). The section appears only for
-		// github.com projects; zero open PRs (or a failed fetch) yield a
-		// "No open PRs" empty-state row.
-		var prEntries []navEntry
-		if prsFor, ok := m.projectPRs(&p); ok {
-			for pi, pr := range prsFor {
-				if filter != "" && !match(pr.Title) && !match(strconv.Itoa(pr.Number)) {
-					continue
-				}
-				prEntries = append(prEntries, navEntry{
-					kind: navKindPR, depth: 2, projID: p.origin.Identity,
-					section: sectionPRs, itemIdx: pi,
-					label: fmt.Sprintf("#%d  %s", pr.Number, pr.Title),
-					badge: prStateBadge(pr),
-					id:    p.origin.Identity + "|pr:" + strconv.Itoa(pr.Number),
-				})
-			}
-			if len(prsFor) == 0 && (filter == "" || match("no open prs")) {
-				prEntries = append(prEntries, navEntry{
-					kind: navKindPR, depth: 2, projID: p.origin.Identity,
-					section: sectionPRs, itemIdx: -1,
-					label: "No open PRs",
-					id:    p.origin.Identity + "|pr:empty",
-				})
-			}
-		}
-
-		anyClone := false
-		for _, ce := range cloneEntries {
-			if ce.matches {
-				anyClone = true
-				break
-			}
-		}
-		if filter != "" && !match(p.name) && !anyClone && len(prEntries) == 0 {
-			continue
-		}
-
-		projEntry := navEntry{
-			kind:   navKindProject,
-			depth:  0,
-			projID: p.origin.Identity,
-			label:  p.name,
-			id:     p.origin.Identity,
-		}
-		if p.local {
-			projEntry.badge = localTag.Render("local")
-		}
-		m.entries = append(m.entries, projEntry)
-		if m.isCollapsed(projEntry) {
-			continue
-		}
-
-		for _, ce := range cloneEntries {
-			m.entries = append(m.entries, ce.navEntry)
-			if m.isCollapsed(ce.navEntry) {
-				continue
-			}
-			for _, se := range ce.sections {
-				secEntry := navEntry{
-					kind: navKindSection, depth: 2, repoIdx: ce.repoIdx,
-					projID:  p.origin.Identity,
-					section: se.sec, label: se.sec.title(),
-					id: ce.navEntry.id + "|sec:" + strconv.Itoa(int(se.sec)),
-				}
-				m.entries = append(m.entries, secEntry)
-				if m.isCollapsed(secEntry) {
-					continue
-				}
-				m.entries = append(m.entries, se.entries...)
-			}
-		}
-
-		// Project-level Pull requests section, after the clones.
-		if len(prEntries) > 0 {
-			prsSec := navEntry{
-				kind: navKindSection, depth: 1, projID: p.origin.Identity,
-				section: sectionPRs, label: sectionPRs.title(),
-				id: p.origin.Identity + "|sec:" + strconv.Itoa(int(sectionPRs)),
-			}
-			m.entries = append(m.entries, prsSec)
-			if !m.isCollapsed(prsSec) {
-				m.entries = append(m.entries, prEntries...)
-			}
-		}
+	if m.view == viewByObject {
+		m.entries = m.buildObjectView(data, projects, sessions, live, prsMap, match)
+	} else {
+		m.entries = m.buildProjectView(data, projects, sessions, live, prsMap, match)
 	}
 
 	// Restore selection by identity.
@@ -488,6 +304,353 @@ func (m navTreeModel) rebuild(data []gitx.RepoData, sessions map[string][]agents
 		m.cursor = 0
 	}
 	return m
+}
+
+// objectSectionOrder is the fixed top-level order of the object view.
+var objectSectionOrder = []sectionKind{sectionWorktrees, sectionBranches, sectionLive, sectionAgents, sectionPRs}
+
+// objectSecID / objectProjID produce stable ids for object-view nodes, kept
+// distinct from the project-view ids so collapse state never collides.
+func objectSecID(sec sectionKind) string {
+	return "objsec:" + strconv.Itoa(int(sec))
+}
+
+func objectProjID(sec sectionKind, identity string) string {
+	return "objproj:" + strconv.Itoa(int(sec)) + ":" + identity
+}
+
+// buildProjectView lays the tree out by project: project → clone → sections.
+func (m navTreeModel) buildProjectView(data []gitx.RepoData, projects []projectNode, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, match func(string) bool) []navEntry {
+	var out []navEntry
+
+	type cloneEntry struct {
+		navEntry
+		matches  bool // clone or one of its children matches the filter
+		sections []secEntries
+	}
+
+	for _, p := range projects {
+		var cloneEntries []cloneEntry
+		for _, ci := range p.clones {
+			rd := data[ci]
+			repoID := rd.Repo.Path
+			secs := cloneSections(rd, ci, sessions, live, m.cfg, match)
+
+			anyChild := false
+			for _, se := range secs {
+				if len(se.entries) > 0 {
+					anyChild = true
+					break
+				}
+			}
+			cloneLabel := m.cloneLabels[repoID]
+			cloneMatches := match(cloneLabel) || match(repoID) || anyChild
+			if filter := strings.ToLower(strings.TrimSpace(m.filter)); filter != "" && !cloneMatches {
+				continue
+			}
+
+			ce := cloneEntry{
+				navEntry: navEntry{
+					kind: navKindClone, depth: 1, repoIdx: ci,
+					projID: p.origin.Identity,
+					label:  cloneLabel, id: repoID,
+				},
+				matches:  cloneMatches,
+				sections: secs,
+			}
+			cloneEntries = append(cloneEntries, ce)
+		}
+
+		// Pull requests live at the project level (they belong to the origin
+		// repo, not to any single clone). The section appears only for
+		// github.com projects; zero open PRs (or a failed fetch) yield a
+		// "No open PRs" empty-state row.
+		prEntries := m.prLeafEntries(&p, match)
+
+		anyClone := false
+		for _, ce := range cloneEntries {
+			if ce.matches {
+				anyClone = true
+				break
+			}
+		}
+		if filter := strings.ToLower(strings.TrimSpace(m.filter)); filter != "" && !match(p.name) && !anyClone && len(prEntries) == 0 {
+			continue
+		}
+
+		projEntry := navEntry{
+			kind:   navKindProject,
+			depth:  0,
+			projID: p.origin.Identity,
+			label:  p.name,
+			id:     p.origin.Identity,
+		}
+		if p.local {
+			projEntry.badge = localTag.Render("local")
+		}
+		out = append(out, projEntry)
+		if m.isCollapsed(projEntry) {
+			continue
+		}
+
+		for _, ce := range cloneEntries {
+			out = append(out, ce.navEntry)
+			if m.isCollapsed(ce.navEntry) {
+				continue
+			}
+			for _, se := range ce.sections {
+				secEntry := navEntry{
+					kind: navKindSection, depth: 2, repoIdx: ce.repoIdx,
+					projID:  p.origin.Identity,
+					section: se.sec, label: se.sec.title(),
+					id: ce.navEntry.id + "|sec:" + strconv.Itoa(int(se.sec)),
+				}
+				out = append(out, secEntry)
+				if m.isCollapsed(secEntry) {
+					continue
+				}
+				for _, e := range se.entries {
+					e.depth = 3
+					out = append(out, e)
+				}
+			}
+		}
+
+		// Project-level Pull requests section, after the clones.
+		if len(prEntries) > 0 {
+			prsSec := navEntry{
+				kind: navKindSection, depth: 1, projID: p.origin.Identity,
+				section: sectionPRs, label: sectionPRs.title(),
+				id: p.origin.Identity + "|sec:" + strconv.Itoa(int(sectionPRs)),
+			}
+			out = append(out, prsSec)
+			if !m.isCollapsed(prsSec) {
+				out = append(out, prEntries...)
+			}
+		}
+	}
+	return out
+}
+
+// buildObjectView lays the tree out by object type: section → project → items,
+// so all worktrees, branches, agents and PRs of a kind live under one section,
+// grouped by project. Sections and projects are collapsible.
+func (m navTreeModel) buildObjectView(data []gitx.RepoData, projects []projectNode, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, match func(string) bool) []navEntry {
+	var out []navEntry
+
+	type group struct {
+		p     *projectNode
+		items []navEntry
+	}
+
+	for _, sec := range objectSectionOrder {
+		var groups []group
+		for pi := range projects {
+			p := &projects[pi]
+			var items []navEntry
+
+			switch sec {
+			case sectionPRs:
+				prsFor, ok := m.projectPRs(p)
+				if !ok || len(prsFor) == 0 {
+					continue
+				}
+				items = prsLeafEntries(p, prsFor, match, m.filter)
+			default:
+				for _, ci := range p.clones {
+					rd := data[ci]
+					ctx := ""
+					if len(p.clones) > 1 {
+						ctx = m.cloneLabels[rd.Repo.Path]
+					}
+					for _, se := range cloneSections(rd, ci, sessions, live, m.cfg, match) {
+						if se.sec != sec {
+							continue
+						}
+						for _, e := range se.entries {
+							e.depth = 2
+							e.ctx = ctx
+							items = append(items, e)
+						}
+					}
+				}
+			}
+
+			if len(items) > 0 {
+				groups = append(groups, group{p, items})
+			}
+		}
+		if len(groups) == 0 {
+			continue
+		}
+
+		secEntry := navEntry{
+			kind: navKindSection, depth: 0, section: sec,
+			repoIdx: -1,
+			label:   sec.title(),
+			id:      objectSecID(sec),
+		}
+		out = append(out, secEntry)
+		if m.isCollapsed(secEntry) {
+			continue
+		}
+
+		for _, g := range groups {
+			projEntry := navEntry{
+				kind: navKindProject, depth: 1,
+				projID: g.p.origin.Identity,
+				label:  g.p.name,
+				id:     objectProjID(sec, g.p.origin.Identity),
+			}
+			if g.p.local {
+				projEntry.badge = localTag.Render("local")
+			}
+			out = append(out, projEntry)
+			if m.isCollapsed(projEntry) {
+				continue
+			}
+			out = append(out, g.items...)
+		}
+	}
+	return out
+}
+
+// cloneSections builds the clone-scoped sections (worktrees, branches, live
+// agents, agent sessions) for one clone, honoring the filter. Leaf depths are
+// left unset; the calling view sets them.
+func cloneSections(rd gitx.RepoData, ci int, sessions map[string][]agents.Session, live map[string][]agents.Agent, cfg *config.Config, match func(string) bool) []secEntries {
+	repoID := rd.Repo.Path
+	var secs []secEntries
+
+	// Worktrees
+	var wtEntries []navEntry
+	for wi, wt := range rd.Worktrees {
+		label := wt.Branch
+		if label == "" {
+			label = "(detached " + wt.ShortSHA + ")"
+		}
+		if wt.Main {
+			label += " [main]"
+		}
+		if !match(label) && !match(wt.Path) {
+			continue
+		}
+		badge := spawnerStyle(wt.Spawner, spawnerColor(cfg, wt.Spawner)).Render(worktreeLabel(wt))
+		if wt.Dirty {
+			badge += " " + statusYellow.Render("✱")
+		}
+		if wt.Locked {
+			badge += " " + statusGray.Render("🔒")
+		}
+		wtEntries = append(wtEntries, navEntry{
+			kind: navKindWorktree, repoIdx: ci,
+			section: sectionWorktrees, itemIdx: wi,
+			label: label, badge: badge, isWT: true,
+			id: repoID + "|wt:" + wt.Path,
+		})
+	}
+	secs = append(secs, secEntries{sectionWorktrees, wtEntries})
+
+	// Branches
+	var brEntries []navEntry
+	for bi, br := range rd.Branches {
+		if !match(br.Name) {
+			continue
+		}
+		badge := ""
+		if br.Active() {
+			badge = statusCyan.Render("●")
+		}
+		brEntries = append(brEntries, navEntry{
+			kind: navKindBranch, repoIdx: ci,
+			section: sectionBranches, itemIdx: bi,
+			label: br.Name, badge: badge,
+			id: repoID + "|br:" + br.Name,
+		})
+	}
+	secs = append(secs, secEntries{sectionBranches, brEntries})
+
+	// Live agents (running now) — distinct from historical sessions.
+	var liveEntries []navEntry
+	for li, a := range live[repoID] {
+		if !match(a.Name) && !match(a.Cwd) && !match(a.Status) && !match(a.State) {
+			continue
+		}
+		label := a.Name
+		if label == "" {
+			label = a.ID
+		}
+		liveEntries = append(liveEntries, navEntry{
+			kind: navKindLiveAgent, repoIdx: ci,
+			section: sectionLive, itemIdx: li,
+			label: label, badge: liveBadge(a),
+			id: repoID + "|live:" + a.ID,
+		})
+	}
+	if len(liveEntries) > 0 {
+		secs = append(secs, secEntries{sectionLive, liveEntries})
+	}
+
+	// Agent sessions
+	var agEntries []navEntry
+	for si, s := range sessions[repoID] {
+		if !match(s.Title) && !match(s.Dir) && !match(s.Tool) {
+			continue
+		}
+		var badge string
+		if s.AgentName != "" {
+			badge = gearStyle.Render("⚙") + " "
+		}
+		if s.Tool == "claude" {
+			badge += statusOrange.Render("claude")
+		} else {
+			badge += statusGreen.Render("opencode")
+		}
+		agEntries = append(agEntries, navEntry{
+			kind: navKindSession, repoIdx: ci,
+			section: sectionAgents, itemIdx: si,
+			label: s.Title, badge: badge,
+			id: repoID + "|ag:" + s.Tool + ":" + s.ID,
+		})
+	}
+	secs = append(secs, secEntries{sectionAgents, agEntries})
+
+	return secs
+}
+
+// prLeafEntries builds the PR leaf entries for a project, honoring the filter
+// and including a "No open PRs" empty-state row when the project has none.
+func (m navTreeModel) prLeafEntries(p *projectNode, match func(string) bool) []navEntry {
+	prsFor, ok := m.projectPRs(p)
+	if !ok {
+		return nil
+	}
+	return prsLeafEntries(p, prsFor, match, m.filter)
+}
+
+func prsLeafEntries(p *projectNode, prsFor []prs.PR, match func(string) bool, filter string) []navEntry {
+	var out []navEntry
+	for pi, pr := range prsFor {
+		if !match(pr.Title) && !match(strconv.Itoa(pr.Number)) {
+			continue
+		}
+		out = append(out, navEntry{
+			kind: navKindPR, depth: 2, projID: p.origin.Identity,
+			section: sectionPRs, itemIdx: pi,
+			label: fmt.Sprintf("#%d  %s", pr.Number, pr.Title),
+			badge: prStateBadge(pr),
+			id:    p.origin.Identity + "|pr:" + strconv.Itoa(pr.Number),
+		})
+	}
+	if len(prsFor) == 0 && filter == "" {
+		out = append(out, navEntry{
+			kind: navKindPR, depth: 2, projID: p.origin.Identity,
+			section: sectionPRs, itemIdx: -1,
+			label: "No open PRs",
+			id:    p.origin.Identity + "|pr:empty",
+		})
+	}
+	return out
 }
 
 func (m *navTreeModel) selectedEntry() *navEntry {
@@ -604,8 +767,18 @@ func (m navTreeModel) View() string {
 			prefix = wtTag.Render("WT") + " "
 		}
 
-		label := truncate(e.label, innerW-lipgloss.Width(indent)-lipgloss.Width(prefix)-lipgloss.Width(e.badge)-4)
+		ctxTxt := ""
+		ctxW := 0
+		if e.ctx != "" {
+			ctxTxt = " " + statusGray.Render("· "+e.ctx)
+			ctxW = lipgloss.Width(ctxTxt)
+		}
+
+		label := truncate(e.label, innerW-lipgloss.Width(indent)-lipgloss.Width(prefix)-lipgloss.Width(e.badge)-ctxW-4)
 		line := fmt.Sprintf("%s%s %s%s", marker, indent, prefix, label)
+		if ctxTxt != "" {
+			line += ctxTxt
+		}
 		if e.badge != "" {
 			line += " " + e.badge
 		}
