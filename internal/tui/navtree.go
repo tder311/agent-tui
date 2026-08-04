@@ -26,6 +26,7 @@ const (
 	navKindSession
 	navKindLiveAgent // a running agent (`claude agents --json`)
 	navKindPR        // an open pull request of a github.com project
+	navKindEmpty     // a section with nothing in it (object view)
 )
 
 // viewMode selects the nav tree hierarchy: by project (project → clone →
@@ -319,6 +320,23 @@ func objectProjID(sec sectionKind, identity string) string {
 	return "objproj:" + strconv.Itoa(int(sec)) + ":" + identity
 }
 
+// emptySectionLabel is the empty-state row shown under an object-view section
+// that has no items.
+func emptySectionLabel(sec sectionKind) string {
+	switch sec {
+	case sectionWorktrees:
+		return "No worktrees"
+	case sectionBranches:
+		return "No branches"
+	case sectionLive:
+		return "No live agents"
+	case sectionPRs:
+		return "No open PRs"
+	default:
+		return "No agent sessions"
+	}
+}
+
 // buildProjectView lays the tree out by project: project → clone → sections.
 func (m navTreeModel) buildProjectView(data []gitx.RepoData, projects []projectNode, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, match func(string) bool) []navEntry {
 	var out []navEntry
@@ -480,9 +498,6 @@ func (m navTreeModel) buildObjectView(data []gitx.RepoData, projects []projectNo
 				groups = append(groups, group{p, items})
 			}
 		}
-		if len(groups) == 0 {
-			continue
-		}
 
 		secEntry := navEntry{
 			kind: navKindSection, depth: 0, section: sec,
@@ -492,6 +507,21 @@ func (m navTreeModel) buildObjectView(data []gitx.RepoData, projects []projectNo
 		}
 		out = append(out, secEntry)
 		if m.isCollapsed(secEntry) {
+			continue
+		}
+
+		// Every section header always shows (matching the fixed top-level
+		// structure); a section with nothing in it gets a dim empty-state row.
+		// Like the project view, empty states are suppressed while filtering.
+		if len(groups) == 0 {
+			if strings.TrimSpace(m.filter) == "" {
+				out = append(out, navEntry{
+					kind: navKindEmpty, depth: 1, section: sec,
+					repoIdx: -1,
+					label:   emptySectionLabel(sec),
+					id:      objectSecID(sec) + ":empty",
+				})
+			}
 			continue
 		}
 
@@ -792,6 +822,8 @@ func (m navTreeModel) View() string {
 			rowStyle = rowStyle.Bold(true)
 		case navKindSection:
 			rowStyle = rowStyle.Foreground(clrGray)
+		case navKindEmpty:
+			rowStyle = rowStyle.Foreground(clrDim)
 		}
 		lines = append(lines, rowStyle.Render(line))
 	}
