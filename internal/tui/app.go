@@ -270,6 +270,14 @@ func (m appModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "o":
 		return m.openSelected()
+	case "v":
+		if m.nav.view == viewByProject {
+			m.nav.view = viewByObject
+		} else {
+			m.nav.view = viewByProject
+		}
+		m.rebuildNav()
+		return m, nil
 	case "d":
 		return m.requestRemoveWorktree()
 	case "D":
@@ -325,7 +333,7 @@ func (m *appModel) refreshDetail(gotoTop bool) {
 // openSelected implements the `o` key.
 func (m appModel) openSelected() (tea.Model, tea.Cmd) {
 	e := m.nav.selectedEntry()
-	if e == nil || e.repoIdx >= len(m.data) {
+	if e == nil || e.repoIdx < 0 || e.repoIdx >= len(m.data) {
 		return m, nil
 	}
 	rd := m.data[e.repoIdx]
@@ -432,7 +440,7 @@ func (m appModel) requestDeleteBranch() (tea.Model, tea.Cmd) {
 // requestPrune implements the `p` key (repo level).
 func (m appModel) requestPrune() (tea.Model, tea.Cmd) {
 	e := m.nav.selectedEntry()
-	if e == nil || e.repoIdx >= len(m.data) {
+	if e == nil || e.repoIdx < 0 || e.repoIdx >= len(m.data) {
 		return m, nil
 	}
 	rd := m.data[e.repoIdx]
@@ -504,7 +512,7 @@ func (m appModel) headerView() string {
 	if m.scanning {
 		scanState = "  " + statusCyan.Render("scanning…")
 	}
-	left := fmt.Sprintf(" agent-tui — %d projects · %d clones · %d sessions · %d live · %d PRs", nProjects, len(m.data), nSessions, nLive, nPRs)
+	left := fmt.Sprintf(" agent-tui — %d projects · %d clones · %d sessions · %d live · %d PRs · %s", nProjects, len(m.data), nSessions, nLive, nPRs, m.nav.view)
 	right := ""
 	if !m.lastScan.IsZero() {
 		right = dimStyle.Render("updated " + m.lastScan.Format("15:04:05")) + " "
@@ -546,7 +554,7 @@ func (m appModel) footerView() string {
 	if m.filtering {
 		help = focusTag + "  " + statusYellow.Render("/"+m.filter.Value()) + "  " + dimStyle.Render("[enter] apply [esc] clear")
 	} else {
-		help = focusTag + "  " + dimStyle.Render("[enter] collapse [tab] focus [/] filter [o] open [d/D] delete [p] prune [?] help [q] quit")
+		help = focusTag + "  " + dimStyle.Render("[enter] collapse [tab] focus [/] filter [o] open [v] view [d/D] delete [p] prune [?] help [q] quit")
 	}
 	spare := m.width - lipgloss.Width(help) - lipgloss.Width(extra) - 2
 	if spare < 0 {

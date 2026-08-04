@@ -98,14 +98,19 @@ func renderDetail(nav *navTreeModel, data []gitx.RepoData, sessions map[string][
 	if e == nil {
 		return dimStyle.Render("No repos discovered.\n\nagent-tui sweeps your configured scan roots\nfor .git markers (default: ~), so any app's\nworktrees are found. Press r to rescan.")
 	}
-	if e.repoIdx < 0 || e.repoIdx >= len(data) {
-		return ""
-	}
-	rd := data[e.repoIdx]
 	w := width - 4
 	if w < 20 {
 		w = 20
 	}
+	// Object-view section nodes are not tied to a single clone (repoIdx -1);
+	// render an aggregate of every project that has items of this kind.
+	if e.kind == navKindSection && e.repoIdx < 0 {
+		return sectionAggregateDetail(e, nav, data, sessions, live, prsMap, w)
+	}
+	if e.repoIdx < 0 || e.repoIdx >= len(data) {
+		return ""
+	}
+	rd := data[e.repoIdx]
 
 	switch e.kind {
 	case navKindProject:
@@ -238,6 +243,80 @@ func projectDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, session
 	}
 	b.WriteString("\n" + dimStyle.Render("enter/return to expand a clone   r refresh"))
 	return b.String()
+}
+
+// sectionAggregateDetail renders an object-view section node (not tied to any
+// single clone): a per-project breakdown of every project that has items of
+// this kind.
+func sectionAggregateDetail(e *navEntry, nav *navTreeModel, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, w int) string {
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(" "+e.section.title()+" ") + "\n")
+	b.WriteString(dimStyle.Render(strings.ToLower(e.section.title())+" across all projects") + "\n")
+
+	shown := 0
+	for pi := range nav.projects {
+		p := &nav.projects[pi]
+		blocks := sectionProjectBlocks(p, e.section, data, sessions, live, prsMap, w)
+		if len(blocks) == 0 {
+			continue
+		}
+		shown++
+		b.WriteString("\n" + tableHeaderStyle.Render(" "+p.name+" ") + "\n")
+		for _, blk := range blocks {
+			b.WriteString(blk + "\n")
+		}
+	}
+	if shown == 0 {
+		b.WriteString(dimStyle.Render("Nothing here yet.") + "\n")
+	}
+	b.WriteString("\n" + dimStyle.Render("v toggle view   enter/return to expand a project"))
+	return b.String()
+}
+
+// sectionProjectBlocks renders one project's contribution to an object-view
+// section: the relevant table per clone (or a single PR table, which is
+// project-scoped).
+func sectionProjectBlocks(p *projectNode, sec sectionKind, data []gitx.RepoData, sessions map[string][]agents.Session, live map[string][]agents.Agent, prsMap map[string][]prs.PR, w int) []string {
+	var out []string
+	if sec == sectionPRs {
+		prsFor := prsMap[p.origin.Identity]
+		if len(prsFor) > 0 {
+			out = append(out, prsTable(prsFor, w))
+		}
+		return out
+	}
+	for i, ci := range p.clones {
+		rd := data[ci]
+		label := p.cloneLabel[i]
+		if label == "" {
+			label = rd.Repo.Key
+		}
+		var body string
+		switch sec {
+		case sectionWorktrees:
+			if len(rd.Worktrees) == 0 {
+				continue
+			}
+			body = worktreesTable(rd, w)
+		case sectionBranches:
+			if len(rd.Branches) == 0 {
+				continue
+			}
+			body = branchesTable(rd, w)
+		case sectionLive:
+			if len(live[rd.Repo.Path]) == 0 {
+				continue
+			}
+			body = liveAgentsTable(live[rd.Repo.Path], w)
+		default:
+			if len(sessions[rd.Repo.Path]) == 0 {
+				continue
+			}
+			body = sessionsTable(sessions[rd.Repo.Path], w)
+		}
+		out = append(out, dimStyle.Render("· "+label)+"\n"+body)
+	}
+	return out
 }
 
 // liveAgentsTable lists the agents currently running in a clone.
