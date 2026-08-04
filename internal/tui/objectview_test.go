@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tder311/agent-tui/internal/agents"
+	"github.com/tder311/agent-tui/internal/gitx"
+	"github.com/tder311/agent-tui/internal/prs"
 )
 
 // objectViewApp builds a fully-expanded app in the object view.
@@ -25,6 +28,81 @@ func objectViewApp() appModel {
 	m.nav.collapsed = map[string]bool{}
 	m.rebuildNav()
 	return m
+}
+
+// emptyObjectViewApp builds a fully-expanded object view with no items of any
+// kind: one github.com clone with no worktrees, branches, sessions, live
+// agents or PRs.
+func emptyObjectViewApp() appModel {
+	data := []gitx.RepoData{
+		{
+			Repo: gitx.RepoInfo{Key: "alpha", Path: "/repos/alpha", Origin: gitx.Origin{HasRemote: true, Identity: "github.com/org/alpha", Slug: "alpha", Host: "github.com"}},
+		},
+	}
+	m := appModel{
+		width: 120, height: 40, ready: true,
+		nav:      newNavTreeModel(navWidth),
+		data:     data,
+		sessions: map[string][]agents.Session{},
+		live:     map[string][]agents.Agent{},
+		prs:      map[string][]prs.PR{},
+	}
+	m.layout()
+	m.nav.view = viewByObject
+	m.rebuildNav()
+	m.nav.collapsed = map[string]bool{}
+	m.rebuildNav()
+	return m
+}
+
+// TestObjectViewAlwaysShowsSections: every fixed section header shows even
+// when it has nothing in it, with a dim empty-state row underneath.
+func TestObjectViewAlwaysShowsSections(t *testing.T) {
+	m := emptyObjectViewApp()
+
+	want := map[sectionKind]string{
+		sectionWorktrees: "No worktrees",
+		sectionBranches:  "No branches",
+		sectionLive:      "No live agents",
+		sectionAgents:    "No agent sessions",
+		sectionPRs:       "No open PRs",
+	}
+	var gotSections []sectionKind
+	for i := range m.nav.entries {
+		e := m.nav.entries[i]
+		if e.kind == navKindSection {
+			gotSections = append(gotSections, e.section)
+			continue
+		}
+		if e.kind != navKindEmpty {
+			t.Errorf("expected only empty rows under empty sections, got %+v", e)
+			continue
+		}
+		if want[e.section] != e.label {
+			t.Errorf("section %s: empty row %q, want %q", e.section.title(), e.label, want[e.section])
+		}
+		if e.depth != 1 || e.repoIdx != -1 {
+			t.Errorf("empty row %q: depth=%d repoIdx=%d, want depth 1 repoIdx -1", e.label, e.depth, e.repoIdx)
+		}
+	}
+	if len(gotSections) != len(objectSectionOrder) {
+		t.Fatalf("expected %d sections, got %v", len(objectSectionOrder), gotSections)
+	}
+	for i, sec := range objectSectionOrder {
+		if gotSections[i] != sec {
+			t.Errorf("sections out of order: got %v, want %v", gotSections, objectSectionOrder)
+			break
+		}
+	}
+
+	// Empty rows render without panicking and are not collapsible targets.
+	for i := range m.nav.entries {
+		m.nav.cursor = i
+		m.refreshDetail(false)
+		if m.View() == "" {
+			t.Errorf("empty view for entry %d", i)
+		}
+	}
 }
 
 func TestObjectViewTreeShape(t *testing.T) {
