@@ -21,6 +21,7 @@ On first run a config file is created at `~/.config/agent-tui/config.json` with 
 - **Live agents** — the agents actually *running right now*, from the official Claude local API (`claude agents --json`), shown in a distinct **Agents (live)** section with a status dot (busy = green, idle = gray, blocked = yellow) and a `bg`/`fg` (background/interactive) tag; `o` resumes the agent with `claude --resume <sessionId>`. If `claude` isn't on your PATH this section simply doesn't appear — you keep the historical sessions only
 - **Pull requests** — open PRs for each `github.com` project (via the `gh` CLI), listed in a **Pull requests** section under the project with state badges (open = green, draft = gray, merged/closed faded), author, head → base refs, and +/- additions/deletions; `o` opens a PR in your browser. Only **your own** PRs are shown by default (`prs_author: "@me"`). Fetched once per project and shared across its clones, so N clones cost one `gh` call. If `gh` isn't installed or a repo has no remote, the section just doesn't appear
 - **Prune** — `p` runs `git worktree prune` per repo (with confirm)
+- **Cleanup** — `c` opens a checklist of finished/stale background agents, job scratch dirs, orphaned job dirs and dead transcript stubs, with sizes; see [Cleanup](#cleanup). Also available headless as `agent-tui clean`
 - **Auto-refresh** — background rescan every 10s (configurable) plus `r` manual refresh; all git/fs I/O runs off the UI thread with timeouts
 - **Help** — `?` for full keybindings
 
@@ -56,7 +57,7 @@ Selecting a **project** shows an overview pane: its origin URL, aggregate worktr
 
 Sessions are inherently app-specific and best-effort; they never affect discovery. A worktree always shows up even when no session data exists for its app.
 
-agent-tui is read-only by default: scanning never mutates any repo. The only mutations are the explicit `d` / `D` / `p` actions, each behind a y/n confirm.
+agent-tui is read-only by default: scanning never mutates any repo. The only mutations are the explicit `d` / `D` / `p` actions and the `c` cleanup screen, each behind a y/n confirm.
 
 ## Configuration
 
@@ -75,6 +76,7 @@ agent-tui is read-only by default: scanning never mutates any repo. The only mut
   "session_days": 30,
   "session_cap": 50,
   "prs_author": "@me",
+  "cleanup_days": 7,
   "refresh_seconds": 10
 }
 ```
@@ -87,9 +89,33 @@ agent-tui is read-only by default: scanning never mutates any repo. The only mut
 - `session_days` — only show sessions updated within this many days (default `30`; `0` = unlimited)
 - `session_cap` — cap historical sessions per clone, most recent first (default `50`; `0` = unlimited)
 - `prs_author` — GitHub login to filter open PRs by (default `"@me"`, the authenticated gh user, so you see only your own PRs; a login shows another author; `""` shows everyone's)
+- `cleanup_days` — how long a background agent/job must have been inactive before the cleanup screen offers to remove it (default `7`)
 - `refresh_seconds` — auto-refresh interval (minimum 2)
 
 Legacy `scan_root` and `repo_roots` settings are still honored and merged into `scan_roots`.
+
+## Cleanup
+
+Background agents leave data behind in `~/.claude`: every job keeps a `tmp/` scratch dir (these can reach gigabytes), finished and abandoned agents stay registered, and deleted worktrees leave transcript stubs behind. Press `c` in the TUI (or run `agent-tui clean`) to list what can be reclaimed, grouped and sized:
+
+| Group | What | Action | Preselected |
+|---|---|---|---|
+| Finished agents | job `state: done`, inactive ≥ `cleanup_days` | `claude rm <id>` (session + worktree when safe) | auto-named agents only |
+| Stale agents | not done and not busy, inactive ≥ `cleanup_days` (e.g. stuck `blocked`) | `claude rm <id>` | no |
+| Job scratch dirs | `jobs/<id>/tmp/` of a finished job | empty `tmp/`, conversation stays resumable | when inactive ≥ `cleanup_days` |
+| Orphaned job dirs | `jobs/<id>/` with no `state.json` and no live agent (1h grace) | delete dir | yes |
+| Dead transcript stubs | `projects/<slug>/` holding only a `sessions-index.json` whose transcripts are gone | delete dir | yes |
+
+`space` toggles, `a` selects all/none, `enter` asks for a y/n confirmation showing the item count and bytes freed, then runs and rescans. Anything `claude rm` refuses (e.g. unpushed commits in an agent's worktree) is shown verbatim and left alone.
+
+Safety rails: agents reported **busy** by `claude agents --json`, and jobs in state `working`, are never candidates. Transcripts that still exist and `memory/` dirs are never touched. Every filesystem delete is re-validated at apply time and must be a job/project dir strictly inside `~/.claude/jobs` or `~/.claude/projects`.
+
+```bash
+agent-tui clean                  # dry run: list candidates, [x] = preselected
+agent-tui clean --apply          # remove the preselected ones
+agent-tui clean --apply --all    # remove every candidate
+agent-tui clean --days 14        # override cleanup_days
+```
 
 ## Build from source
 
