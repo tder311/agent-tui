@@ -32,6 +32,7 @@ var helpEntries = []helpEntry{
 	{"d", "Remove worktree (confirms; force-offer if dirty)"},
 	{"D", "Delete branch (confirms; -D offer if unmerged)"},
 	{"p", "Prune stale worktrees in repo"},
+	{"c", "Cleanup: remove finished/stale agents, job scratch, orphaned job dirs, dead transcript stubs"},
 	{"r", "Refresh now"},
 	{"y / n", "Confirm / dismiss destructive action"},
 	{"?", "Toggle this help"},

@@ -42,6 +42,7 @@ type appModel struct {
 	focusIndex int // 0 = nav, 1 = content
 	showHelp   bool
 	confirming *actionRequest
+	cleanup    *cleanupModel
 
 	statusMsg string
 	statusAt  time.Time
@@ -186,6 +187,15 @@ func (m appModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case CleanupScanMsg:
+		if m.cleanup != nil {
+			m.cleanup.setItems(msg.Items, msg.Opts)
+		}
+		return m, nil
+
+	case CleanupDoneMsg:
+		return m.handleCleanupDone(msg)
+
 	case OpenResultMsg:
 		if msg.Err != nil {
 			if msg.Kind == openBrowser {
@@ -239,6 +249,10 @@ func (m appModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.cleanup != nil {
+		return m.handleCleanupKey(key)
+	}
+
 	// Help modal.
 	if key == "?" {
 		m.showHelp = !m.showHelp
@@ -284,6 +298,8 @@ func (m appModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.requestDeleteBranch()
 	case "p":
 		return m.requestPrune()
+	case "c":
+		return m.openCleanup()
 	}
 
 	// Focus-routed navigation keys.
@@ -477,6 +493,9 @@ func (m appModel) View() string {
 	if m.confirming != nil {
 		return confirmView(m.width, m.height, m.confirming)
 	}
+	if m.cleanup != nil {
+		return cleanupView(m.width, m.height, m.cleanup, m.cfg.CleanupDaysValue())
+	}
 
 	header := m.headerView()
 	nav := m.nav.View()
@@ -554,7 +573,7 @@ func (m appModel) footerView() string {
 	if m.filtering {
 		help = focusTag + "  " + statusYellow.Render("/"+m.filter.Value()) + "  " + dimStyle.Render("[enter] apply [esc] clear")
 	} else {
-		help = focusTag + "  " + dimStyle.Render("[enter] collapse [tab] focus [/] filter [o] open [v] view [d/D] delete [p] prune [?] help [q] quit")
+		help = focusTag + "  " + dimStyle.Render("[enter] collapse [tab] focus [/] filter [o] open [v] view [d/D] delete [p] prune [c] cleanup [?] help [q] quit")
 	}
 	spare := m.width - lipgloss.Width(help) - lipgloss.Width(extra) - 2
 	if spare < 0 {
