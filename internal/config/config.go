@@ -66,6 +66,9 @@ type Config struct {
 	// GitHub login. Default "@me" (the authenticated gh user) shows only
 	// your own PRs; a specific login shows another author; "" shows all.
 	PRSAuthor *string `json:"prs_author,omitempty"`
+	// CleanupDays is how long a background agent or job must have been
+	// inactive before the cleanup screen offers to remove it (default 7).
+	CleanupDays *int `json:"cleanup_days,omitempty"`
 	// ScanRoot is the legacy single scan root, and RepoRoots the legacy
 	// repo list; both are merged into scan_roots when present. New configs
 	// omit them.
@@ -95,6 +98,7 @@ func Default() *Config {
 		SessionDays:    intPtr(30),
 		SessionCap:     intPtr(50),
 		PRSAuthor:      strPtr("@me"),
+		CleanupDays:    intPtr(7),
 	}
 }
 
@@ -123,6 +127,15 @@ func (c *Config) PRSAuthorValue() string {
 		return "@me"
 	}
 	return *c.PRSAuthor
+}
+
+// CleanupDaysValue returns the cleanup inactivity threshold, defaulting to 7
+// when unset or negative.
+func (c *Config) CleanupDaysValue() int {
+	if c == nil || c.CleanupDays == nil || *c.CleanupDays < 0 {
+		return 7
+	}
+	return *c.CleanupDays
 }
 
 func DefaultPath() string {
@@ -170,6 +183,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.PRSAuthor == nil {
 		c.PRSAuthor = strPtr(*d.PRSAuthor)
+	}
+	if c.CleanupDays == nil {
+		c.CleanupDays = intPtr(*d.CleanupDays)
 	}
 	if len(c.ScanRoots) == 0 {
 		c.ScanRoots = d.ScanRoots
