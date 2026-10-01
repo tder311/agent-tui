@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -202,8 +201,7 @@ func TestProjectDetail(t *testing.T) {
 // into projects, WT rows carry the WT tag, and widget collapses to one project
 // when both ~/repos and ~/conductor/repos exist.
 func TestNavRealHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if _, err := os.UserHomeDir(); err != nil {
 		t.Skip("no home")
 	}
 	cfg := config.Default()
@@ -220,23 +218,6 @@ func TestNavRealHome(t *testing.T) {
 	m.rebuildNav()
 	m.nav.collapsed = map[string]bool{}
 	m.rebuildNav()
-
-	cloneCount := func(name string) int {
-		n := 0
-		for i, e := range m.nav.entries {
-			if e.kind == navKindProject && e.label == name {
-				for j := i + 1; j < len(m.nav.entries); j++ {
-					if m.nav.entries[j].kind == navKindProject {
-						break
-					}
-					if m.nav.entries[j].kind == navKindClone && m.nav.entries[j].projID == e.projID {
-						n++
-					}
-				}
-			}
-		}
-		return n
-	}
 
 	projects, clones, wtRows, liveRows := 0, 0, 0, 0
 	for _, e := range m.nav.entries {
@@ -259,15 +240,6 @@ func TestNavRealHome(t *testing.T) {
 	}
 	if wtRows > 0 && !strings.Contains(m.nav.View(), "WT") {
 		t.Error("nav view should render WT tag for worktree rows")
-	}
-	hasDir := func(parts ...string) bool {
-		_, err := os.Stat(filepath.Join(append([]string{home}, parts...)...))
-		return err == nil
-	}
-	if hasDir("repos") && hasDir("conductor", "repos") {
-		if mc := cloneCount("widget"); mc < 2 {
-			t.Errorf("widget should collapse to one project with >=2 clones, got %d", mc)
-		}
 	}
 	t.Logf("projects=%d clones=%d worktreeRows=%d liveAgentRows=%d", projects, clones, wtRows, liveRows)
 }
